@@ -66,7 +66,7 @@ class ArrayUtilExtendedTest {
     @Test
     public void testCalcSortOrderDifferentSizes() {
         IntArrayList arr1 = from(1, 2, 3);
-        IntArrayList arr2 = from(4, 5); // Different size
+        IntArrayList arr2 = from(4, 5);
         
         assertThrows(IllegalArgumentException.class, 
             () -> ArrayUtil.calcSortOrder(arr1, arr2),
@@ -83,7 +83,6 @@ class ArrayUtilExtendedTest {
      */
     @Test
     public void testSubListWithFakerData() {
-        // Generate random numbers using Faker
         IntArrayList original = new IntArrayList();
         int size = faker.number().numberBetween(10, 20);
         
@@ -91,17 +90,14 @@ class ArrayUtilExtendedTest {
             original.add(faker.number().numberBetween(-1000, 1000));
         }
         
-        // Test subList with faker-generated indices
         int fromIndex = faker.number().numberBetween(0, size / 2);
         int toIndex = faker.number().numberBetween(fromIndex, size);
         
         IntArrayList sub = ArrayUtil.subList(original, fromIndex, toIndex);
         
-        // Verify size
         assertEquals(toIndex - fromIndex, sub.size(), 
             "La taille de la sous-liste doit correspondre à la différence de plage");
         
-        // Verify contents
         for (int i = 0; i < sub.size(); i++) {
             assertEquals(original.get(fromIndex + i), sub.get(i), 
                 "Les éléments de la sous-liste doivent correspondre aux éléments originaux aux indices corrects");

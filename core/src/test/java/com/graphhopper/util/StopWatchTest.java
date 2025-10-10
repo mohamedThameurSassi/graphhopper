@@ -65,12 +65,10 @@ class StopWatchTest {
     public void testGetTimeStringFormatting() throws InterruptedException {
         StopWatch sw = new StopWatch();
         
-        // Test with zero elapsed time
         assertEquals("0ns", sw.getTimeString(), "Zero time should format as nanoseconds");
         
-        // Test with some elapsed time
         sw.start();
-        Thread.sleep(10); // Small but measurable delay
+        Thread.sleep(10);
         sw.stop();
         
         String timeString = sw.getTimeString();
