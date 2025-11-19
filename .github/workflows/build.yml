@@ -56,42 +56,44 @@ jobs:
             exit 0
           fi
           
+          # Get the actual branch name from GitHub ref
+          CURRENT_BRANCH="${GITHUB_REF#refs/heads/}"
+          echo "Current branch: $CURRENT_BRANCH"
+          echo "Base branch: $BASE_BRANCH"
+          
           # Only compare if we're not on the base branch
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
           if [ "$CURRENT_BRANCH" == "$BASE_BRANCH" ]; then
-            echo "On base branch, no comparison needed"
+            echo "On base branch, running baseline to establish score"
             echo "baseline_score=0" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          echo "Comparing against $BASE_BRANCH branch..."
-          
-          # Checkout base branch
-          git fetch origin $BASE_BRANCH
-          git checkout origin/$BASE_BRANCH
-          
-
-          mvn -B install -DskipTests
-          cd core
-          mvn -B org.pitest:pitest-maven:mutationCoverage || true
-          
-          # Extract mutation score
-          if [ -d "target/pit-reports" ]; then
-            LATEST_REPORT=$(ls -t target/pit-reports | head -1)
-            if [ -f "target/pit-reports/$LATEST_REPORT/index.html" ]; then
-              BASELINE=$(grep -oP '<div class="coverage_percentage">\K[0-9]+' "target/pit-reports/$LATEST_REPORT/index.html" | head -1)
-              echo "Baseline mutation score: $BASELINE%"
-              echo "baseline_score=$BASELINE" >> $GITHUB_OUTPUT
+          else
+            echo "Comparing against $BASE_BRANCH branch..."
+            
+            # Checkout base branch
+            git fetch origin $BASE_BRANCH
+            git checkout origin/$BASE_BRANCH
+            
+            mvn -B install -DskipTests
+            cd core
+            mvn -B org.pitest:pitest-maven:mutationCoverage -DargLine="" || true
+            
+            # Extract mutation score
+            if [ -d "target/pit-reports" ]; then
+              LATEST_REPORT=$(ls -t target/pit-reports | head -1)
+              if [ -f "target/pit-reports/$LATEST_REPORT/index.html" ]; then
+                BASELINE=$(grep -oP '<div class="coverage_percentage">\K[0-9]+' "target/pit-reports/$LATEST_REPORT/index.html" | head -1)
+                echo "Baseline mutation score: $BASELINE%"
+                echo "baseline_score=$BASELINE" >> $GITHUB_OUTPUT
+              else
+                echo "baseline_score=0" >> $GITHUB_OUTPUT
+              fi
             else
               echo "baseline_score=0" >> $GITHUB_OUTPUT
             fi
-          else
-            echo "baseline_score=0" >> $GITHUB_OUTPUT
+            
+            # Go back to original branch
+            cd ..
+            git checkout -
           fi
-          
-          # Go back to original branch
-          cd ..
-          git checkout -
 
       - name: Run Mutation Testing
         if: matrix.java-version == '24'
@@ -100,7 +102,7 @@ jobs:
           mvn -B install -DskipTests
           # Now run mutation testing on core module
           cd core
-          mvn -B org.pitest:pitest-maven:mutationCoverage
+          mvn -B org.pitest:pitest-maven:mutationCoverage -DargLine=""
       
       - name: Parse Current Mutation Score
         if: matrix.java-version == '24'
