@@ -170,47 +170,9 @@
                     <failOnUnableToExtractRepoInfo>false</failOnUnableToExtractRepoInfo>
                 </configuration>
             </plugin>
-            
-            <!-- PIT Mutation Testing -->
-            <plugin>
-                <groupId>org.pitest</groupId>
-                <artifactId>pitest-maven</artifactId>
-                <version>1.21.0</version>
-                <dependencies>
-                    <dependency>
-                        <groupId>org.pitest</groupId>
-                        <artifactId>pitest-junit5-plugin</artifactId>
-                        <version>1.2.1</version>
-                    </dependency>
-                </dependencies>
-                <configuration>
-                    <targetClasses>
-                        <param>com.graphhopper.*</param>
-                    </targetClasses>
-                    <targetTests>
-                        <param>com.graphhopper.*</param>
-                    </targetTests>
-                    <outputFormats>
-                        <outputFormat>HTML</outputFormat>
-                        <outputFormat>XML</outputFormat>
-                    </outputFormats>
-                    
-                    <jvmArgs>
-                        <value>-Xmx1024m</value>
-                        <value>-Duser.language=en</value>
-                    </jvmArgs>
-                    <threads>4</threads>
-                    <timeoutFactor>2.0</timeoutFactor>
-                    <timeoutConstant>4000</timeoutConstant>
-                    <excludedClasses>
-                        <param>com.graphhopper.apache.commons.*</param>
-                        <param>com.graphhopper.debatty.java.*</param>
-                    </excludedClasses>
-                    <verbose>false</verbose>
-                </configuration>
-            </plugin>
         </plugins>
 
+        <!-- make version available at runtime via version file -->
         <resources>
             <resource>
                 <directory>src/main/resources</directory>
