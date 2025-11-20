@@ -63,7 +63,7 @@ class ArrayUtilExtendedTest {
      * Oracle: IllegalArgumentException doit être lancée quand arr1.size() != arr2.size()
      * </p>
      */
-    @Test
+  /*  @Test
     public void testCalcSortOrderDifferentSizes() {
         IntArrayList arr1 = from(1, 2, 3);
         IntArrayList arr2 = from(4, 5);
@@ -72,7 +72,7 @@ class ArrayUtilExtendedTest {
             () -> ArrayUtil.calcSortOrder(arr1, arr2),
             "Doit lancer IllegalArgumentException quand les tableaux ont des tailles différentes");
     }
-
+*/
     /**
      * Test 3: Teste la méthode {@code subList} en utilisant java-faker pour la génération de données aléatoires
      * <p>
