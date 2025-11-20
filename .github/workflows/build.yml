@@ -49,3 +49,4 @@ jobs:
         run: |
           mvn clean install -DskipTests
           mvn -pl core org.pitest:pitest-maven:mutationCoverage -DargLine=""
+# push car pipeline ne veut aps rouler
