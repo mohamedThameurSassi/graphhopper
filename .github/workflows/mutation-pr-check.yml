@@ -1,0 +1,227 @@
+name: Mutation Testing PR Check
+on:
+  pull_request:
+    branches: [ master ]
+    paths:
+      - '**.java'
+      - 'pom.xml'
+      - '**pom.xml'
+
+jobs:
+  mutation-testing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java 24
+        uses: actions/setup-java@v4
+        with:
+          java-version: 24
+          distribution: temurin
+
+      - name: Cache Maven artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Get changed Java files
+        id: changed-files
+        run: |
+          # Get changed Java files between main and current PR
+          CHANGED_FILES=$(git diff --name-only origin/master...HEAD | grep '\.java$' | grep -v '/test/' || true)
+          echo "Changed files: $CHANGED_FILES"
+          
+          # Convert to class names
+          CHANGED_CLASSES=""
+          for file in $CHANGED_FILES; do
+            if [[ $file == */src/main/java/* ]]; then
+              class_path=${file#*/src/main/java/}
+              class_name=${class_path%.java}
+              class_name=${class_name//\//.}
+              if [ -z "$CHANGED_CLASSES" ]; then
+                CHANGED_CLASSES="$class_name"
+              else
+                CHANGED_CLASSES="$CHANGED_CLASSES,$class_name"
+              fi
+            fi
+          done
+          
+          if [ -z "$CHANGED_CLASSES" ]; then
+            echo "skip_mutation_testing=true" >> $GITHUB_OUTPUT
+            echo "No changed Java classes found"
+          else
+            echo "changed_classes=$CHANGED_CLASSES" >> $GITHUB_OUTPUT
+            echo "skip_mutation_testing=false" >> $GITHUB_OUTPUT
+            echo "Changed classes: $CHANGED_CLASSES"
+          fi
+
+      - name: Build dependencies for PITest
+        if: steps.changed-files.outputs.skip_mutation_testing == 'false'
+        run: mvn -B clean install -pl web-api -am -q
+
+      - name: Run PITest on PR code
+        if: steps.changed-files.outputs.skip_mutation_testing == 'false'
+        id: current-pitest
+        run: |
+          # Run PITest and capture results
+          mvn -pl core org.pitest:pitest-maven:mutationCoverage \
+            -DtargetClasses="${{ steps.changed-files.outputs.changed_classes }}" \
+            -DtargetTests="${{ steps.changed-files.outputs.changed_classes }}*Test" \
+            -DoutputFormats=XML \
+            -Dthreads=2 \
+            --quiet || true
+          
+          # Extract mutation score from XML report
+          if [ -f "core/target/pit-reports/mutations.xml" ]; then
+            MUTATIONS_GENERATED=$(grep -o '<mutation ' core/target/pit-reports/mutations.xml | wc -l || echo "0")
+            MUTATIONS_KILLED=$(grep -o 'status="KILLED"' core/target/pit-reports/mutations.xml | wc -l || echo "0")
+            if [ "$MUTATIONS_GENERATED" -ne "0" ]; then
+              CURRENT_SCORE=$(echo "scale=1; $MUTATIONS_KILLED * 100 / $MUTATIONS_GENERATED" | bc)
+            else
+              CURRENT_SCORE=0
+            fi
+            echo "current_score=$CURRENT_SCORE" >> $GITHUB_OUTPUT
+            echo "current_killed=$MUTATIONS_KILLED" >> $GITHUB_OUTPUT
+            echo "current_total=$MUTATIONS_GENERATED" >> $GITHUB_OUTPUT
+            echo "PR mutation score: $CURRENT_SCORE% ($MUTATIONS_KILLED/$MUTATIONS_GENERATED)"
+          else
+            echo "current_score=0" >> $GITHUB_OUTPUT
+            echo "PITest report not found"
+          fi
+
+      - name: Get main branch baseline
+        if: steps.changed-files.outputs.skip_mutation_testing == 'false'
+        id: baseline-pitest
+        run: |
+          # Stash any changes
+          git stash || true
+          
+          # Switch to main branch
+          git checkout origin/master
+          
+          # Build and run PITest on main branch
+          mvn -B clean install -pl web-api -am -q
+          
+          mvn -pl core org.pitest:pitest-maven:mutationCoverage \
+            -DtargetClasses="${{ steps.changed-files.outputs.changed_classes }}" \
+            -DtargetTests="${{ steps.changed-files.outputs.changed_classes }}*Test" \
+            -DoutputFormats=XML \
+            -Dthreads=2 \
+            --quiet || true
+          
+          # Extract baseline mutation score
+          if [ -f "core/target/pit-reports/mutations.xml" ]; then
+            MUTATIONS_GENERATED=$(grep -o '<mutation ' core/target/pit-reports/mutations.xml | wc -l || echo "0")
+            MUTATIONS_KILLED=$(grep -o 'status="KILLED"' core/target/pit-reports/mutations.xml | wc -l || echo "0")
+            if [ "$MUTATIONS_GENERATED" -ne "0" ]; then
+              BASELINE_SCORE=$(echo "scale=1; $MUTATIONS_KILLED * 100 / $MUTATIONS_GENERATED" | bc)
+            else
+              BASELINE_SCORE=0
+            fi
+            echo "baseline_score=$BASELINE_SCORE" >> $GITHUB_OUTPUT
+            echo "baseline_killed=$MUTATIONS_KILLED" >> $GITHUB_OUTPUT
+            echo "baseline_total=$MUTATIONS_GENERATED" >> $GITHUB_OUTPUT
+            echo "Main branch baseline score: $BASELINE_SCORE% ($MUTATIONS_KILLED/$MUTATIONS_GENERATED)"
+          else
+            echo "baseline_score=0" >> $GITHUB_OUTPUT
+            echo "Baseline PITest report not found"
+          fi
+
+      - name: Check for mutation score regression
+        if: steps.changed-files.outputs.skip_mutation_testing == 'false'
+        id: regression-check
+        run: |
+          CURRENT_SCORE="${{ steps.current-pitest.outputs.current_score }}"
+          BASELINE_SCORE="${{ steps.baseline-pitest.outputs.baseline_score }}"
+          TOLERANCE=5  # 5% tolerance
+          
+          echo "=== Mutation Testing Results ==="
+          echo "Changed Classes: ${{ steps.changed-files.outputs.changed_classes }}"
+          echo "Baseline Score: $BASELINE_SCORE% (${{ steps.baseline-pitest.outputs.baseline_killed }}/${{ steps.baseline-pitest.outputs.baseline_total }})"
+          echo "Current Score:  $CURRENT_SCORE% (${{ steps.current-pitest.outputs.current_killed }}/${{ steps.current-pitest.outputs.current_total }})"
+          
+          # Calculate difference
+          DIFF=$(echo "$CURRENT_SCORE - $BASELINE_SCORE" | bc)
+          echo "Difference: ${DIFF}%"
+          
+          # Check for regression (current score lower than baseline by more than tolerance)
+          if (( $(echo "$DIFF < -$TOLERANCE" | bc -l) )); then
+            echo "regression_detected=true" >> $GITHUB_OUTPUT
+            echo "❌ MUTATION SCORE REGRESSION DETECTED!"
+            echo "The mutation score dropped by ${DIFF}% (tolerance: ${TOLERANCE}%)"
+          else
+            echo "regression_detected=false" >> $GITHUB_OUTPUT
+            echo "✅ No significant mutation score regression detected"
+          fi
+
+      - name: Comment PR with mutation test results
+        if: steps.changed-files.outputs.skip_mutation_testing == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const currentScore = '${{ steps.current-pitest.outputs.current_score }}';
+            const baselineScore = '${{ steps.baseline-pitest.outputs.baseline_score }}';
+            const regressionDetected = '${{ steps.regression-check.outputs.regression_detected }}' === 'true';
+            const changedClasses = '${{ steps.changed-files.outputs.changed_classes }}';
+            
+            const diff = parseFloat(currentScore) - parseFloat(baselineScore);
+            const diffText = diff >= 0 ? `+${diff.toFixed(1)}%` : `${diff.toFixed(1)}%`;
+            
+            const emoji = regressionDetected ? '❌' : '✅';
+            const status = regressionDetected ? 'REGRESSION DETECTED' : 'PASSED';
+            
+            const comment = `## ${emoji} Mutation Testing Results
+            
+            **Status:** ${status}
+            
+            | Metric | Baseline (main) | Current (PR) | Difference |
+            |--------|-----------------|--------------|------------|
+            | **Mutation Score** | ${baselineScore}% | ${currentScore}% | ${diffText} |
+            | **Mutations Killed** | ${{ steps.baseline-pitest.outputs.baseline_killed }} | ${{ steps.current-pitest.outputs.current_killed }} | |
+            | **Total Mutations** | ${{ steps.baseline-pitest.outputs.baseline_total }} | ${{ steps.current-pitest.outputs.current_total }} | |
+            
+            **Changed Classes:** \`${changedClasses}\`
+            
+            ${regressionDetected ? 
+              '⚠️ **Mutation score regression detected!** Please review your changes and add more comprehensive tests.' :
+              '🎉 **Great job!** Your changes maintain or improve the mutation test quality.'
+            }
+            
+            <details>
+            <summary>About Mutation Testing</summary>
+            
+            Mutation testing measures test quality by introducing small changes (mutations) to your code and checking if your tests catch them. A higher score means better test coverage and quality.
+            
+            - **Mutation Score**: Percentage of mutations caught by tests
+            - **Tolerance**: 5% (small drops are acceptable)
+            - **Goal**: Maintain or improve mutation scores with new changes
+            </details>`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      - name: Fail if mutation score regression detected
+        if: steps.changed-files.outputs.skip_mutation_testing == 'false' && steps.regression-check.outputs.regression_detected == 'true'
+        run: |
+          echo "❌ Mutation testing regression detected!"
+          echo "Current score: ${{ steps.current-pitest.outputs.current_score }}%"
+          echo "Baseline score: ${{ steps.baseline-pitest.outputs.baseline_score }}%"
+          echo "Please improve your tests to maintain mutation score quality."
+          exit 1
+
+      - name: Upload mutation test reports
+        if: always() && steps.changed-files.outputs.skip_mutation_testing == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-test-reports-${{ github.sha }}
+          path: core/target/pit-reports/

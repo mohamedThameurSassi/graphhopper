@@ -321,6 +321,9 @@
                     <mutators>
                         <mutator>STRONGER</mutator>
                     </mutators>
+                    <exportLineCoverage>true</exportLineCoverage>
+                    <historyInputLocation>target/pit-history</historyInputLocation>
+                    <historyOutputLocation>target/pit-history</historyOutputLocation>
                 </configuration>
             </plugin>
         </plugins>
