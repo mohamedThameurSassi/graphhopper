@@ -40,5 +40,5 @@ jobs:
         run: mvn -B clean install -pl web-api -am
         if: matrix.java-version == '24'
       - name: Run PITest mutation testing on ArrayUtil
-        run: mvn -pl core org.pitest:pitest-maven:mutationCoverage -DtargetClasses=com.graphhopper.util.ArrayUtil -DtargetTests=com.graphhopper.util.ArrayUtilTest -Dmutators=DEFAULT -Dthreads=2
+        run: mvn -pl core org.pitest:pitest-maven:mutationCoverage -DtargetClasses=com.graphhopper.util.ArrayUtil -DtargetTests=com.graphhopper.util.ArrayUtilTest -Dmutators=STRONGER -Dthreads=2
         if: matrix.java-version == '24'
