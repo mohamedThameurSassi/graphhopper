@@ -1,125 +1,99 @@
-name: Build and Test
+name: Build, Test & Mutation Score Check
 
 on: push
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
       matrix:
         java-version: [24, 25-ea]
 
     steps:
+      # Checkout
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 
 
+      # Install Java
       - uses: actions/setup-java@v4
         with:
           java-version: ${{ matrix.java-version }}
           distribution: temurin
 
-      - name: Cache Maven dependencies
+      # Cache Maven
+      - name: Cache Maven artifacts
         uses: actions/cache@v4
         with:
           path: ~/.m2/repository
           key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-maven-
+          restore-keys: |
+            ${{ runner.os }}-maven-
 
-      - name: Build and Run Tests
+      - name: Build ${{ matrix.java-version }}
         run: mvn -B clean test
 
-      # -------- 1. Get Baseline Mutation Score -----
-      - name: Get Baseline Mutation Score
+      - name: Run PIT Mutation Testing (core module only)
         if: matrix.java-version == '24'
-        id: baseline
-        run: |
-          # Determine base branch (master or main)
-          if git rev-parse --verify origin/master >/dev/null 2>&1; then
-            BASE="master"
-          else
-            BASE="main"
-          fi
+        run: mvn clean install -DskipTests && mvn -pl core org.pitest:pitest-maven:mutationCoverage -DargLine=""
 
-          CURRENT="${GITHUB_REF#refs/heads/}"
-          echo "Current branch: $CURRENT"
-          echo "Base branch: $BASE"
-
-          # Don't compare if you're ON main/master
-          if [ "$CURRENT" = "$BASE" ]; then
-            echo "On base branch → baseline = 0"
-            echo "baseline_score=0" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Fetch the base branch
-          git fetch origin $BASE
-
-          # Try to load last mutation report from main WITHOUT checking it out
-          if git show origin/$BASE:core/target/pit-reports/latest/index.html > baseline.html 2>/dev/null; then
-            BASELINE=$(grep -oP '<div class="coverage_percentage">\K[0-9]+' baseline.html | head -1)
-            echo "Baseline mutation score: $BASELINE%"
-            echo "baseline_score=$BASELINE" >> $GITHUB_OUTPUT
-          else
-            echo "No baseline report found → baseline = 0"
-            echo "baseline_score=0" >> $GITHUB_OUTPUT
-          fi
-
-      # -------- 2. Run PIT mutation testing ----------
-      - name: Run Mutation Testing
-        if: matrix.java-version == '24'
-        run: |
-          mvn -B install -DskipTests
-          cd core
-          mvn -B org.pitest:pitest-maven:mutationCoverage
-
-      # -------- 3. Parse Current Mutation Score ------
-      - name: Parse Current Mutation Score
+      - name: Extract current PIT score
         if: matrix.java-version == '24'
         id: current
         run: |
-          cd core/target/pit-reports
-          REPORT=$(ls -t | head -1)
-          cd "$REPORT"
+          SCORE=$(grep -oPm1 "(?<=<score>)[^<]+" core/target/pit-reports/*/summary.xml || echo 0)
+          echo "current_score=$SCORE" >> $GITHUB_OUTPUT
+          echo "Current mutation score: $SCORE"
 
-          SCORE=$(grep -oP '<div class="coverage_percentage">\K[0-9]+' index.html | head -1)
-          echo "Current PIT score: $SCORE%"
-          echo "mutation_score=$SCORE" >> $GITHUB_OUTPUT
+      - name: Get previous PIT score
+        if: matrix.java-version == '24'
+        id: previous
+        run: |
+          if [ -f mutation_score.txt ]; then
+            PREV=$(cat mutation_score.txt)
+          else
+            PREV=0
+          fi
+          echo "previous_score=$PREV" >> $GITHUB_OUTPUT
+          echo "Previous mutation score: $PREV"
 
-      # -------- 4. Compare baseline vs current -------
-      - name: Compare Score
+      - name: Compare scores
         if: matrix.java-version == '24'
         id: compare
         run: |
-          CURRENT=${{ steps.current.outputs.mutation_score }}
-          BASELINE=${{ steps.baseline.outputs.baseline_score }}
+          CUR=${{ steps.current.outputs.current_score }}
+          PREV=${{ steps.previous.outputs.previous_score }}
 
-          echo "Baseline: $BASELINE%"
-          echo "Current : $CURRENT%"
+          echo "🔍 Comparing mutation scores..."
+          echo "Previous: $PREV"
+          echo "Current:  $CUR"
 
-          if [ "$BASELINE" != "0" ] && [ "$CURRENT" -lt "$BASELINE" ]; then
-            DIFF=$((BASELINE - CURRENT))
-            echo " Mutation score decreased by $DIFF%"
-            echo "::error::Mutation score decreased from $BASELINE to $CURRENT"
+          if [ "$CUR" -lt "$PREV" ]; then
+            echo "❌ Mutation score decreased! ($CUR < $PREV)"
             exit 1
-          else
-            echo "Mutation score OK."
           fi
 
-      - name: Upload PIT Report
+          echo "✅ Mutation score OK or improved ($CUR ≥ $PREV)"
+
+      - name: Save new mutation score
+        if: matrix.java-version == '24' && success()
+        run: echo "${{ steps.current.outputs.current_score }}" > mutation_score.txt
+
+      - name: Upload Mutation Report
         if: matrix.java-version == '24' && always()
         uses: actions/upload-artifact@v4
         with:
           name: pit-report-${{ github.sha }}
           path: core/target/pit-reports/
 
-      - name: Summary
+      - name: Create Job Summary
         if: matrix.java-version == '24' && always()
         run: |
-          echo "## Mutation Testing" >> $GITHUB_STEP_SUMMARY
+          echo "## 🧬 Mutation Testing Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Score |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Baseline | ${{ steps.baseline.outputs.baseline_score }}% |" >> $GITHUB_STEP_SUMMARY
-          echo "| Current | ${{ steps.current.outputs.mutation_score }}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Current Mutation Coverage** | ${{ steps.current.outputs.current_score }}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Previous Mutation Coverage** | ${{ steps.previous.outputs.previous_score }}% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📄 [View Full Report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
