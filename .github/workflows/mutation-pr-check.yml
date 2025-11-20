@@ -33,13 +33,21 @@ jobs:
       - name: Get changed Java files
         id: changed-files
         run: |
-          # Get changed Java files between main and current PR
-          CHANGED_FILES=$(git diff --name-only origin/master...HEAD | grep '\.java$' | grep -v '/test/' || true)
-          echo "Changed files: $CHANGED_FILES"
+          # Get all changed Java files between main and current PR (including test files)
+          ALL_CHANGED_FILES=$(git diff --name-only origin/master...HEAD | grep '\.java$' || true)
+          echo "All changed Java files: $ALL_CHANGED_FILES"
           
-          # Convert to class names
+          # Get changed main source files (for mutation testing targets)
+          MAIN_CHANGED_FILES=$(echo "$ALL_CHANGED_FILES" | grep -v '/test/' || true)
+          echo "Changed main source files: $MAIN_CHANGED_FILES"
+          
+          # Get changed test files (to understand what's being tested)
+          TEST_CHANGED_FILES=$(echo "$ALL_CHANGED_FILES" | grep '/test/' || true)
+          echo "Changed test files: $TEST_CHANGED_FILES"
+          
+          # Convert main source files to class names for mutation testing
           CHANGED_CLASSES=""
-          for file in $CHANGED_FILES; do
+          for file in $MAIN_CHANGED_FILES; do
             if [[ $file == */src/main/java/* ]]; then
               class_path=${file#*/src/main/java/}
               class_name=${class_path%.java}
@@ -52,13 +60,90 @@ jobs:
             fi
           done
           
+          # If no main source files changed, but test files did, analyze test files to find target classes
+          if [ -z "$CHANGED_CLASSES" ] && [ -n "$TEST_CHANGED_FILES" ]; then
+            echo "No main source files changed, but test files were modified."
+            echo "Analyzing test files to find target classes..."
+            
+            for test_file in $TEST_CHANGED_FILES; do
+              if [[ $test_file == */src/test/java/* ]]; then
+                echo "Analyzing test file: $test_file"
+                
+                # Extract package info from test file
+                test_class_path=${test_file#*/src/test/java/}
+                test_package=${test_class_path%/*}
+                test_class_name=${test_class_path##*/}
+                test_class_name=${test_class_name%.java}
+                
+                # Strategy 1: Look for direct class references in the test file
+                if [ -f "$test_file" ]; then
+                  # Look for simple class name references (avoiding license text and common words)
+                  simple_class_refs=$(grep -o '\b[A-Z][a-zA-Z]*\b' "$test_file" | grep -v -E '(Test|Assert|String|List|Array|Int|Boolean|Exception|Override|Before|After|Junit|Jupiter|Licensed|GraphHopper|GmbH|License|Apache|Copyright|Version|Unless|WITHOUT|WARRANTIES|OR|OF|NOTICE|KIND|IS|CONDITIONS|BASIS|AS|ANY|See|Oracle|Motivation|Faker|Doit|Team|Student|Les|La|Ces|Utiliser|You)' | sort | uniq -c | sort -nr)
+                  
+                  # Test the most referenced classes that exist in the same package
+                  found_target=false
+                  echo "$simple_class_refs" | while read count class_name; do
+                    if [[ $class_name =~ ^[0-9]+$ ]] || [ -z "$class_name" ] || [ "$found_target" = true ]; then
+                      continue
+                    fi
+                    
+                    full_class_name="${test_package//\//.}.${class_name}"
+                    class_file="core/src/main/java/${test_package}/${class_name}.java"
+                    
+                    if [ -f "$class_file" ]; then
+                      echo "Found target class: $full_class_name (referenced $count times in test)"
+                      if [ -z "$CHANGED_CLASSES" ]; then
+                        CHANGED_CLASSES="$full_class_name"
+                      else
+                        CHANGED_CLASSES="$CHANGED_CLASSES,$full_class_name"
+                      fi
+                      found_target=true
+                      break
+                    fi
+                  done
+                  
+                  # If still no match, try pattern matching on test class name
+                  if [ -z "$CHANGED_CLASSES" ]; then
+                    potential_classes=""
+                    if [[ $test_class_name == *Test ]]; then
+                      # Remove "Test" suffix: ArrayUtilTest -> ArrayUtil
+                      potential_classes="${test_class_name%Test}"
+                    elif [[ $test_class_name == *ExtendedTest ]]; then
+                      # Remove "ExtendedTest" suffix: ArrayUtilExtendedTest -> ArrayUtil
+                      base_name=${test_class_name%ExtendedTest}
+                      potential_classes="$base_name ${base_name}Util ${base_name}Helper"
+                    fi
+                    
+                    # Test each potential class
+                    for potential_class in $potential_classes; do
+                      if [ -n "$potential_class" ]; then
+                        full_class_name="${test_package//\//.}.${potential_class}"
+                        class_file="core/src/main/java/${test_package}/${potential_class}.java"
+                        
+                        if [ -f "$class_file" ]; then
+                          echo "Found target class: $full_class_name (inferred from test name)"
+                          if [ -z "$CHANGED_CLASSES" ]; then
+                            CHANGED_CLASSES="$full_class_name"
+                          else
+                            CHANGED_CLASSES="$CHANGED_CLASSES,$full_class_name"
+                          fi
+                          break
+                        fi
+                      fi
+                    done
+                  fi
+                fi
+              fi
+            done
+          fi
+          
           if [ -z "$CHANGED_CLASSES" ]; then
             echo "skip_mutation_testing=true" >> $GITHUB_OUTPUT
-            echo "No changed Java classes found"
+            echo "No testable classes found (no main classes changed or inferred from test changes)"
           else
             echo "changed_classes=$CHANGED_CLASSES" >> $GITHUB_OUTPUT
             echo "skip_mutation_testing=false" >> $GITHUB_OUTPUT
-            echo "Changed classes: $CHANGED_CLASSES"
+            echo "Classes to test: $CHANGED_CLASSES"
           fi
 
       - name: Build dependencies for PITest
