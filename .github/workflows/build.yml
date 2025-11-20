@@ -48,4 +48,4 @@ jobs:
       - name: Run PIT Mutation Tests
         run: |
           mvn clean install -DskipTests
-          mvn -pl core org.pitest:pitest-maven:mutationCoverage
+          mvn -pl core org.pitest:pitest-maven:mutationCoverage -DargLine=""
