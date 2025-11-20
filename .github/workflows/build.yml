@@ -40,59 +40,38 @@ jobs:
       - name: Build ${{ matrix.java-version }}
         run: mvn -B clean test
       
-      # Mutation Testing (only on Java 24 to avoid duplication)
       - name: Get Baseline Mutation Score
         if: matrix.java-version == '24'
         id: baseline-score
         run: |
-          # Try to get baseline from master or main branch
+          # Identify base branch
           if git rev-parse --verify origin/master >/dev/null 2>&1; then
             BASE_BRANCH="master"
-          elif git rev-parse --verify origin/main >/dev/null 2>&1; then
-            BASE_BRANCH="main"
           else
-            echo "No master/main branch found, skipping baseline comparison"
-            echo "baseline_score=0" >> $GITHUB_OUTPUT
-            exit 0
+            BASE_BRANCH="main"
           fi
-          
-          # Get the actual branch name from GitHub ref
+
           CURRENT_BRANCH="${GITHUB_REF#refs/heads/}"
           echo "Current branch: $CURRENT_BRANCH"
           echo "Base branch: $BASE_BRANCH"
-          
-          # Only compare if we're not on the base branch
-          if [ "$CURRENT_BRANCH" == "$BASE_BRANCH" ]; then
-            echo "On base branch, running baseline to establish score"
+
+          # Don't compare baseline when on main itself
+          if [ "$CURRENT_BRANCH" = "$BASE_BRANCH" ]; then
             echo "baseline_score=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Fetch the baseline report file
+          git fetch origin $BASE_BRANCH
+
+          # Try to extract baseline mutation report from base branch without checking it out
+          if git show origin/$BASE_BRANCH:core/target/pit-reports/latest/index.html > baseline-index.html 2>/dev/null; then
+            BASELINE=$(grep -oP '<div class="coverage_percentage">\K[0-9]+' baseline-index.html | head -1)
+            echo "Baseline mutation score: $BASELINE%"
+            echo "baseline_score=$BASELINE" >> $GITHUB_OUTPUT
           else
-            echo "Comparing against $BASE_BRANCH branch..."
-            
-            # Checkout base branch
-            git fetch origin $BASE_BRANCH
-            git checkout origin/$BASE_BRANCH
-            
-            mvn -B install -DskipTests
-            cd core
-            mvn -B org.pitest:pitest-maven:mutationCoverage -DargLine="" || true
-            
-            # Extract mutation score
-            if [ -d "target/pit-reports" ]; then
-              LATEST_REPORT=$(ls -t target/pit-reports | head -1)
-              if [ -f "target/pit-reports/$LATEST_REPORT/index.html" ]; then
-                BASELINE=$(grep -oP '<div class="coverage_percentage">\K[0-9]+' "target/pit-reports/$LATEST_REPORT/index.html" | head -1)
-                echo "Baseline mutation score: $BASELINE%"
-                echo "baseline_score=$BASELINE" >> $GITHUB_OUTPUT
-              else
-                echo "baseline_score=0" >> $GITHUB_OUTPUT
-              fi
-            else
-              echo "baseline_score=0" >> $GITHUB_OUTPUT
-            fi
-            
-            # Go back to original branch
-            cd ..
-            git checkout -
+            echo "No baseline found, setting baseline_score=0"
+            echo "baseline_score=0" >> $GITHUB_OUTPUT
           fi
 
       - name: Run Mutation Testing
