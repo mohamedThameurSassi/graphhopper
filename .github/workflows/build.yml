@@ -36,19 +36,27 @@ jobs:
             ${{ runner.os}}-node_modules-
       - name: Build ${{ matrix.java-version }}
         id: maven-test
-        run: mvn -B clean test
+        run: mvn -B clean test -DfailIfNoTests=false
         continue-on-error: true
       
       - name: Rick Roll on Test Failure
         if: steps.maven-test.outcome == 'failure'
         run: |
-          echo "❌ Tests failed! Here's a helpful tutorial on writing better tests:"
-          echo "🎥 https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+          echo "════════════════════════════════════════════════════════"
+          echo "❌ TESTS FAILED!"
+          echo "════════════════════════════════════════════════════════"
           echo ""
-          echo "Never gonna give you up, never gonna let you down! 🎵"
-            - name: Fail if tests failed
-              if: steps.maven-test.outcome == 'failure'
-              run: exit 1
+          echo "📚 Need help writing better tests?"
+          echo "🎥 Watch this comprehensive tutorial:"
+          echo ""
+          echo "👉 https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+          echo ""
+          echo "🎵 Never gonna give you up, never gonna let you down! 🎵"
+          echo "════════════════════════════════════════════════════════"
+      
+      - name: Fail if tests failed
+        if: steps.maven-test.outcome == 'failure'
+        run: exit 1
 
   mutation-check:
     needs: build
