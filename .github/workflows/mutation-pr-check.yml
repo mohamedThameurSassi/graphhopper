@@ -40,26 +40,13 @@ jobs:
           # Get changed main source files (for mutation testing targets)
           MAIN_CHANGED_FILES=$(echo "$ALL_CHANGED_FILES" | grep -v '/test/' || true)
           echo "Changed main source files: $MAIN_CHANGED_FILES"
-          # Get all changed Java files between main and current PR (including test files)
-          ALL_CHANGED_FILES=$(git diff --name-only origin/master...HEAD | grep '\.java$' || true)
-          echo "All changed Java files: $ALL_CHANGED_FILES"
           
-          # Get changed main source files (for mutation testing targets)
-          MAIN_CHANGED_FILES=$(echo "$ALL_CHANGED_FILES" | grep -v '/test/' || true)
-          echo "Changed main source files: $MAIN_CHANGED_FILES"
-          
-          # Get changed test files (to understand what's being tested)
-          TEST_CHANGED_FILES=$(echo "$ALL_CHANGED_FILES" | grep '/test/' || true)
-          echo "Changed test files: $TEST_CHANGED_FILES"
-          
-          # Convert main source files to class names for mutation testing
           # Get changed test files (to understand what's being tested)
           TEST_CHANGED_FILES=$(echo "$ALL_CHANGED_FILES" | grep '/test/' || true)
           echo "Changed test files: $TEST_CHANGED_FILES"
           
           # Convert main source files to class names for mutation testing
           CHANGED_CLASSES=""
-          for file in $MAIN_CHANGED_FILES; do
           for file in $MAIN_CHANGED_FILES; do
             if [[ $file == */src/main/java/* ]]; then
               class_path=${file#*/src/main/java/}
@@ -153,11 +140,9 @@ jobs:
           if [ -z "$CHANGED_CLASSES" ]; then
             echo "skip_mutation_testing=true" >> $GITHUB_OUTPUT
             echo "No testable classes found (no main classes changed or inferred from test changes)"
-            echo "No testable classes found (no main classes changed or inferred from test changes)"
           else
             echo "changed_classes=$CHANGED_CLASSES" >> $GITHUB_OUTPUT
             echo "skip_mutation_testing=false" >> $GITHUB_OUTPUT
-            echo "Classes to test: $CHANGED_CLASSES"
             echo "Classes to test: $CHANGED_CLASSES"
           fi
 
