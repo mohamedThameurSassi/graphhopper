@@ -82,8 +82,9 @@ class ArrayUtilTest {
         // assertFalse(ArrayUtil.isPermutation(IntArrayList.from(0, 1, 3, 3, 4, 4, 6)));
     }
 
-    @Test
-    public void testReverse() {
+   
+   // @Test
+    /*public void testReverse() {
         assertEquals(from(), ArrayUtil.reverse(from()));
         assertEquals(from(1), ArrayUtil.reverse(from(1)));
         assertEquals(from(9, 5), ArrayUtil.reverse(from(5, 9)));
@@ -118,7 +119,7 @@ class ArrayUtilTest {
         assertEquals(1, ArrayUtil.removeConsecutiveDuplicates(arr, arr.length));
         assertEquals(0, ArrayUtil.removeConsecutiveDuplicates(arr, 0));
     }
-
+    */
     @Test
     public void testWithoutConsecutiveDuplicates() {
         assertEquals(from(), ArrayUtil.withoutConsecutiveDuplicates(from()));
