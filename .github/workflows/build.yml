@@ -58,142 +58,38 @@ jobs:
           name: pit-reports
           path: core/target/pit-reports/
       
-      - name: Get changed Java files for mutation testing
-        id: changed-files
+      - name: Check if mutation testing should run
+        id: should-run-mutation
         if: matrix.java-version == '24'
         run: |
-          # Simple and reliable change detection similar to your friend's approach
-          echo "=== Detecting Changed Files ==="
+          # Simple approach: check if any Java files changed
+          JAVA_CHANGES=$(git diff --name-only HEAD~1 HEAD | grep '\.java$' | wc -l || echo "0")
           
-          # Get all changed Java files between HEAD~1 and HEAD (similar to your friend's approach)
-          ALL_CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep '\.java$' || true)
-          echo "All changed Java files: $ALL_CHANGED_FILES"
+          echo "=== 🔍 Mutation Testing Decision ==="
+          echo "Java files changed: $JAVA_CHANGES"
           
-          # If no files in HEAD~1 comparison, try current commit only
-          if [ -z "$ALL_CHANGED_FILES" ]; then
-            echo "No files found with HEAD~1, trying single commit diff..."
-            ALL_CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD | grep '\.java$' || true)
-          fi
-          
-          # Separate main source files and test files
-          MAIN_CHANGED_FILES=""
-          TEST_CHANGED_FILES=""
-          
-          for file in $ALL_CHANGED_FILES; do
-            if [[ $file == *"/test/"* ]]; then
-              TEST_CHANGED_FILES="$TEST_CHANGED_FILES $file"
-            elif [[ $file == *"/src/main/java/"* ]]; then
-              MAIN_CHANGED_FILES="$MAIN_CHANGED_FILES $file"
-            fi
-          done
-          
-          echo "Changed main source files: $MAIN_CHANGED_FILES"
-          echo "Changed test files: $TEST_CHANGED_FILES"
-          
-          # Check if any tests were modified (similar to your friend's logic)
-          TEST_CHANGES_COUNT=$(echo "$TEST_CHANGED_FILES" | wc -w || echo "0")
-          if [ "$TEST_CHANGES_COUNT" -gt 0 ]; then
-            echo "TEST_CHANGES=true" >> $GITHUB_ENV
-            echo "✅ Test changes detected: $TEST_CHANGES_COUNT test files"
+          if [ "$JAVA_CHANGES" -gt 0 ]; then
+            echo "run_mutation=true" >> $GITHUB_OUTPUT
+            echo "✅ Java changes detected - running full PITest on all modules"
           else
-            echo "TEST_CHANGES=false" >> $GITHUB_ENV
-            echo "❌ No test changes detected"
-          fi
-          
-          # Convert main source files to class names for mutation testing
-          CHANGED_CLASSES=""
-          for file in $MAIN_CHANGED_FILES; do
-            if [[ $file == */src/main/java/* ]]; then
-              class_path=${file#*/src/main/java/}
-              class_name=${class_path%.java}
-              class_name=${class_name//\//.}
-              if [ -z "$CHANGED_CLASSES" ]; then
-                CHANGED_CLASSES="$class_name"
-              else
-                CHANGED_CLASSES="$CHANGED_CLASSES,$class_name"
-              fi
-            fi
-          done
-          
-          # If no main source files changed, but test files did, infer target classes from test names
-          if [ -z "$CHANGED_CLASSES" ] && [ "$TEST_CHANGES_COUNT" -gt 0 ]; then
-            echo "No main source files changed, but test files were modified."
-            echo "Inferring target classes from test file names..."
-            
-            for test_file in $TEST_CHANGED_FILES; do
-              if [[ $test_file == */src/test/java/* ]]; then
-                # Extract class info from test file path
-                test_class_path=${test_file#*/src/test/java/}
-                test_package_path=${test_class_path%/*}
-                test_class_name=${test_class_path##*/}
-                test_class_name=${test_class_name%.java}
-                
-                # Simple pattern matching: TestClass -> TargetClass
-                target_class=""
-                if [[ $test_class_name == *Test ]]; then
-                  target_class="${test_class_name%Test}"
-                elif [[ $test_class_name == *ExtendedTest ]]; then
-                  target_class="${test_class_name%ExtendedTest}"
-                fi
-                
-                if [ -n "$target_class" ]; then
-                  full_class_name="${test_package_path//\//.}.${target_class}"
-                  target_file="core/src/main/java/${test_package_path}/${target_class}.java"
-                  
-                  if [ -f "$target_file" ]; then
-                    echo "✅ Found target class: $full_class_name (inferred from $test_file)"
-                    if [ -z "$CHANGED_CLASSES" ]; then
-                      CHANGED_CLASSES="$full_class_name"
-                    else
-                      CHANGED_CLASSES="$CHANGED_CLASSES,$full_class_name"
-                    fi
-                  else
-                    echo "❌ Target class file not found: $target_file"
-                  fi
-                fi
-              fi
-            done
-          fi
-          
-          # Set outputs
-          if [ -z "$CHANGED_CLASSES" ]; then
-            echo "skip_mutation_testing=true" >> $GITHUB_OUTPUT
-            echo "❌ No testable classes found for mutation testing"
-          else
-            echo "changed_classes=$CHANGED_CLASSES" >> $GITHUB_OUTPUT
-            echo "skip_mutation_testing=false" >> $GITHUB_OUTPUT
-            echo "✅ Classes to test: $CHANGED_CLASSES"
-          fi
-      
-      - name: Display Change Detection Results
-        if: matrix.java-version == '24'
-        run: |
-          echo "=== 🔍 Change Detection Summary ==="
-          echo "Test changes detected: $TEST_CHANGES"
-          if [ "$TEST_CHANGES" = "true" ]; then
-            echo "✅ Tests were modified - mutation testing will run"
-          else
-            echo "ℹ️  No test changes detected"
-          fi
-          
-          if [ "${{ steps.changed-files.outputs.skip_mutation_testing }}" = "false" ]; then
-            echo "🧬 Mutation testing enabled for classes:"
-            echo "${{ steps.changed-files.outputs.changed_classes }}"
-          else
-            echo "⏭️  Mutation testing skipped - no applicable changes found"
+            echo "run_mutation=false" >> $GITHUB_OUTPUT  
+            echo "❌ No Java changes - skipping mutation testing"
           fi
 
-      - name: Run PITest mutation testing on changed classes
-        if: matrix.java-version == '24' && steps.changed-files.outputs.skip_mutation_testing == 'false'
+      - name: Run PITest mutation testing on all modules (CURRENT)
+        id: current-pitest
+        if: matrix.java-version == '24' && steps.should-run-mutation.outputs.run_mutation == 'true'
         run: |
-          echo "Running mutation testing on: ${{ steps.changed-files.outputs.changed_classes }}"
-          mvn -pl core org.pitest:pitest-maven:mutationCoverage \
-            -DtargetClasses="${{ steps.changed-files.outputs.changed_classes }}" \
-            -DtargetTests="${{ steps.changed-files.outputs.changed_classes }}*Test" \
-            -DoutputFormats=XML,HTML \
-            -Dthreads=2
+          echo "=== 🧬 Running PITest on ALL modules (Current state) ==="
           
-          # Extract current mutation score
+          # Run PITest on the core module (main target for mutations)
+          mvn -pl core org.pitest:pitest-maven:mutationCoverage \
+            -DoutputFormats=XML,HTML \
+            -Dthreads=2 \
+            -DtimestampedReports=false \
+            -DhistoryInputLocation=core/target/pit-history \
+            -DhistoryOutputLocation=core/target/pit-history
+          
           if [ -f "core/target/pit-reports/mutations.xml" ]; then
             MUTATIONS_GENERATED=$(grep -o '<mutation ' core/target/pit-reports/mutations.xml | wc -l || echo "0")
             MUTATIONS_KILLED=$(grep -o 'status="KILLED"' core/target/pit-reports/mutations.xml | wc -l || echo "0")
@@ -209,9 +105,93 @@ jobs:
               echo "🧬 No mutations generated"
               echo "CURRENT_SCORE=0" >> $GITHUB_ENV
             fi
+          else
+            echo "❌ PITest report not found"
+            echo "CURRENT_SCORE=0" >> $GITHUB_ENV
           fi
-      
-      - name: Get baseline mutation score from previous commit
+
+      - name: Run PITest on baseline (PREVIOUS COMMIT)
+        id: baseline-pitest
+        if: matrix.java-version == '24' && steps.should-run-mutation.outputs.run_mutation == 'true'
+        run: |
+          echo "=== 📊 Running PITest on BASELINE (Previous commit) ==="
+          
+          # Stash current changes
+          git stash || true
+          
+          # Checkout previous commit
+          git checkout HEAD~1
+          
+          # Build and run PITest on previous commit
+          echo "Building baseline version..."
+          mvn -B clean install -pl web-api -am -q
+          
+          echo "Running PITest on baseline..."
+          mvn -pl core org.pitest:pitest-maven:mutationCoverage \
+            -DoutputFormats=XML,HTML \
+            -Dthreads=2 \
+            -DtimestampedReports=false \
+            --quiet || true
+          
+          # Extract baseline mutation score
+          if [ -f "core/target/pit-reports/mutations.xml" ]; then
+            BASELINE_MUTATIONS_GENERATED=$(grep -o '<mutation ' core/target/pit-reports/mutations.xml | wc -l || echo "0")
+            BASELINE_MUTATIONS_KILLED=$(grep -o 'status="KILLED"' core/target/pit-reports/mutations.xml | wc -l || echo "0")
+            if [ "$BASELINE_MUTATIONS_GENERATED" -ne "0" ]; then
+              BASELINE_SCORE=$(echo "scale=1; $BASELINE_MUTATIONS_KILLED * 100 / $BASELINE_MUTATIONS_GENERATED" | bc)
+              echo "📊 Baseline Mutation Score: $BASELINE_SCORE% ($BASELINE_MUTATIONS_KILLED/$BASELINE_MUTATIONS_GENERATED)"
+              echo "BASELINE_SCORE=$BASELINE_SCORE" >> $GITHUB_ENV
+              echo "BASELINE_KILLED=$BASELINE_MUTATIONS_KILLED" >> $GITHUB_ENV
+              echo "BASELINE_TOTAL=$BASELINE_MUTATIONS_GENERATED" >> $GITHUB_ENV
+            else
+              echo "📊 No baseline mutations found"
+              echo "BASELINE_SCORE=0" >> $GITHUB_ENV
+            fi
+          else
+            echo "📊 No baseline mutation report found"
+            echo "BASELINE_SCORE=0" >> $GITHUB_ENV
+          fi
+          
+          # Return to current commit
+          git checkout -
+          git stash pop || true
+
+      - name: Compare mutation scores and check for regression
+        if: matrix.java-version == '24' && steps.should-run-mutation.outputs.run_mutation == 'true'
+        run: |
+          CURRENT_SCORE="${{ env.CURRENT_SCORE }}"
+          BASELINE_SCORE="${{ env.BASELINE_SCORE }}"
+          TOLERANCE=5  # 5% tolerance
+          
+          echo "=== 🧬 Mutation Testing Comparison Results ==="
+          echo "📊 Baseline Score:  ${BASELINE_SCORE}% (${{ env.BASELINE_KILLED }}/${{ env.BASELINE_TOTAL }})"
+          echo "🧬 Current Score:   ${CURRENT_SCORE}% (${{ env.CURRENT_KILLED }}/${{ env.CURRENT_TOTAL }})"
+          
+          if [ -n "$CURRENT_SCORE" ] && [ -n "$BASELINE_SCORE" ]; then
+            # Calculate difference
+            DIFF=$(echo "$CURRENT_SCORE - $BASELINE_SCORE" | bc -l)
+            echo "📈 Difference: ${DIFF}%"
+            
+            # Check for regression (current score lower than baseline by more than tolerance)
+            if (( $(echo "$DIFF < -$TOLERANCE" | bc -l) )); then
+              echo "❌ MUTATION SCORE REGRESSION DETECTED!"
+              echo "The mutation score dropped by ${DIFF}% (tolerance: ${TOLERANCE}%)"
+              echo "🚨 BUILD FAILED: Please improve your tests to maintain mutation score quality."
+              echo "MUTATION_REGRESSION=true" >> $GITHUB_ENV
+            elif (( $(echo "$DIFF > $TOLERANCE" | bc -l) )); then
+              echo "🎉 MUTATION SCORE IMPROVEMENT!"
+              echo "The mutation score improved by ${DIFF}%! Great job! 🎯"
+              echo "MUTATION_REGRESSION=false" >> $GITHUB_ENV
+            else
+              echo "✅ No significant mutation score regression detected (${DIFF}%)"
+              echo "MUTATION_REGRESSION=false" >> $GITHUB_ENV
+            fi
+          else
+            echo "⚠️  Could not compare scores - skipping regression check"
+            echo "MUTATION_REGRESSION=false" >> $GITHUB_ENV
+          fi
+
+      - name: Motivation on Mutation Testing Failure 🎵
         if: matrix.java-version == '24' && steps.changed-files.outputs.skip_mutation_testing == 'false'
         run: |
           # Get previous commit hash
@@ -296,17 +276,17 @@ jobs:
         run: |
           echo "Your changes made the mutation score go down"
           echo "To learn more about mutation testing and how to do TDD effectively, check out:"
-          echo "https://www.youtube.com/watch?v=ZXsQAXx_ao0 "
+          echo "https://www.youtube.com/watch?v=xvFZjo5PgG0&list=RDxvFZjo5PgG0&start_radio=1"
       
       - name: Upload mutation test reports
-        if: always() && matrix.java-version == '24' && steps.changed-files.outputs.skip_mutation_testing == 'false'
+        if: always() && matrix.java-version == '24' && steps.should-run-mutation.outputs.run_mutation == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: pit-reports
           path: core/target/pit-reports/
           
       - name: Save PITest History
-        if: always() && matrix.java-version == '24'
+        if: always() && matrix.java-version == '24' && steps.should-run-mutation.outputs.run_mutation == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: pitest-history
