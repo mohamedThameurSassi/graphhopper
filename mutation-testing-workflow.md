@@ -214,8 +214,22 @@ fi
    - Un pattern trop restrictif exclut des tests pertinents
 
 **Solution retenue** : `com.graphhopper.*`
-Cette approche est un peu risqué car elle capture plus de code que nécessaire.
-Cependant, nous avons décidé qu'il est plus important (dans notre cas) de ce concentrer sur avoir plus que pas assez. Comme les tests et les classes non modifiées n'impacterait pas le PIT test alors on a laissé le surplus.
+
+Cette approche présente un compromis :
+
+**Avantages** :
+- Capture tous les tests pertinents
+- Évite les faux négatifs ("No mutations found")
+- Fonctionne même avec des conventions de nommage variées
+
+**Inconvénients** :
+- Capture plus de code que nécessaire (over-inclusive)
+
+**Justification** :
+> Nous avons décidé qu'il est plus important (dans notre cas) de se concentrer sur avoir plus que pas assez.
+> 
+> Les tests et les classes non modifiées n'impactent pas le résultat final du test de mutation, donc le surplus de code analysé n'affecte que le temps d'exécution, pas la précision des résultats.
+
 ---
 
 
