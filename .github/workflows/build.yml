@@ -9,6 +9,8 @@ jobs:
         java-version: [ 24, 25-ea ]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for reliable diff detection
       - uses: actions/setup-java@v4
         with:
           java-version: ${{ matrix.java-version }}
@@ -40,51 +42,63 @@ jobs:
         run: mvn -B clean install -pl web-api -am
         if: matrix.java-version == '24'
       
+      - name: Load Previous PITest History
+        if: matrix.java-version == '24' && env.TEST_CHANGES == 'false'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: pitest-history
+          path: core/target/pit-history/
+      
+      - name: Load Previous PITest Report
+        if: matrix.java-version == '24'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: pit-reports
+          path: core/target/pit-reports/
+      
       - name: Get changed Java files for mutation testing
         id: changed-files
         if: matrix.java-version == '24'
         run: |
-          # Debug git information
-          echo "GitHub event: ${{ github.event_name }}"
-          echo "Before commit: ${{ github.event.before }}"
-          echo "Current HEAD: $(git rev-parse HEAD)"
+          # Simple and reliable change detection similar to your friend's approach
+          echo "=== Detecting Changed Files ==="
           
-          # Get changed files in this push (comparing with previous commit)
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            # Regular push with previous commit - add error checking
-            echo "Trying to get diff from ${{ github.event.before }} to HEAD"
-            if git rev-parse --verify ${{ github.event.before }} >/dev/null 2>&1; then
-              ALL_CHANGED_FILES=$(git diff --name-only ${{ github.event.before }}..HEAD 2>/dev/null | grep '\.java$' || true)
-              if [ $? -eq 0 ] && [ -n "$ALL_CHANGED_FILES" ]; then
-                echo "Successfully got diff using ${{ github.event.before }}..HEAD"
-              else
-                echo "Git diff failed, trying alternative approach"
-                ALL_CHANGED_FILES=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | grep '\.java$' || true)
-              fi
-            else
-              echo "Previous commit ${{ github.event.before }} not found, using HEAD~1"
-              ALL_CHANGED_FILES=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | grep '\.java$' || true)
-            fi
-          else
-            # First push or other cases - check last few commits
-            echo "Using fallback: checking HEAD~3..HEAD"
-            ALL_CHANGED_FILES=$(git diff --name-only HEAD~3..HEAD 2>/dev/null | grep '\.java$' || true)
-          fi
-          
-          # If still no files found, check the latest commit only
-          if [ -z "$ALL_CHANGED_FILES" ]; then
-            echo "No files found in diff, checking latest commit only"
-            ALL_CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD | grep '\.java$' || true)
-          fi
+          # Get all changed Java files between HEAD~1 and HEAD (similar to your friend's approach)
+          ALL_CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep '\.java$' || true)
           echo "All changed Java files: $ALL_CHANGED_FILES"
           
-          # Get changed main source files (for mutation testing targets)
-          MAIN_CHANGED_FILES=$(echo "$ALL_CHANGED_FILES" | grep -v '/test/' || true)
-          echo "Changed main source files: $MAIN_CHANGED_FILES"
+          # If no files in HEAD~1 comparison, try current commit only
+          if [ -z "$ALL_CHANGED_FILES" ]; then
+            echo "No files found with HEAD~1, trying single commit diff..."
+            ALL_CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD | grep '\.java$' || true)
+          fi
           
-          # Get changed test files (to understand what's being tested)
-          TEST_CHANGED_FILES=$(echo "$ALL_CHANGED_FILES" | grep '/test/' || true)
+          # Separate main source files and test files
+          MAIN_CHANGED_FILES=""
+          TEST_CHANGED_FILES=""
+          
+          for file in $ALL_CHANGED_FILES; do
+            if [[ $file == *"/test/"* ]]; then
+              TEST_CHANGED_FILES="$TEST_CHANGED_FILES $file"
+            elif [[ $file == *"/src/main/java/"* ]]; then
+              MAIN_CHANGED_FILES="$MAIN_CHANGED_FILES $file"
+            fi
+          done
+          
+          echo "Changed main source files: $MAIN_CHANGED_FILES"
           echo "Changed test files: $TEST_CHANGED_FILES"
+          
+          # Check if any tests were modified (similar to your friend's logic)
+          TEST_CHANGES_COUNT=$(echo "$TEST_CHANGED_FILES" | wc -w || echo "0")
+          if [ "$TEST_CHANGES_COUNT" -gt 0 ]; then
+            echo "TEST_CHANGES=true" >> $GITHUB_ENV
+            echo "✅ Test changes detected: $TEST_CHANGES_COUNT test files"
+          else
+            echo "TEST_CHANGES=false" >> $GITHUB_ENV
+            echo "❌ No test changes detected"
+          fi
           
           # Convert main source files to class names for mutation testing
           CHANGED_CLASSES=""
@@ -101,69 +115,74 @@ jobs:
             fi
           done
           
-          # If no main source files changed, but test files did, analyze test files to find target classes
-          if [ -z "$CHANGED_CLASSES" ] && [ -n "$TEST_CHANGED_FILES" ]; then
+          # If no main source files changed, but test files did, infer target classes from test names
+          if [ -z "$CHANGED_CLASSES" ] && [ "$TEST_CHANGES_COUNT" -gt 0 ]; then
             echo "No main source files changed, but test files were modified."
-            echo "Analyzing test files to find target classes..."
+            echo "Inferring target classes from test file names..."
             
             for test_file in $TEST_CHANGED_FILES; do
               if [[ $test_file == */src/test/java/* ]]; then
-                echo "Analyzing test file: $test_file"
-                
-                # Extract package info from test file
+                # Extract class info from test file path
                 test_class_path=${test_file#*/src/test/java/}
-                test_package=${test_class_path%/*}
+                test_package_path=${test_class_path%/*}
                 test_class_name=${test_class_path##*/}
                 test_class_name=${test_class_name%.java}
                 
-                echo "  Test class path: $test_class_path"
-                echo "  Test package: $test_package"
-                echo "  Test class name: $test_class_name"
-                
-                # Strategy: Pattern matching on test class name
-                potential_classes=""
+                # Simple pattern matching: TestClass -> TargetClass
+                target_class=""
                 if [[ $test_class_name == *Test ]]; then
-                  # Remove "Test" suffix: ArrayUtilTest -> ArrayUtil
-                  potential_classes="${test_class_name%Test}"
-                  echo "  Detected *Test pattern, potential class: $potential_classes"
+                  target_class="${test_class_name%Test}"
                 elif [[ $test_class_name == *ExtendedTest ]]; then
-                  # Remove "ExtendedTest" suffix: ArrayUtilExtendedTest -> ArrayUtil
-                  base_name=${test_class_name%ExtendedTest}
-                  potential_classes="$base_name ${base_name}Util ${base_name}Helper"
-                  echo "  Detected *ExtendedTest pattern, potential classes: $potential_classes"
+                  target_class="${test_class_name%ExtendedTest}"
                 fi
                 
-                # Test each potential class
-                for potential_class in $potential_classes; do
-                  if [ -n "$potential_class" ]; then
-                    full_class_name="${test_package//\//.}.${potential_class}"
-                    class_file="core/src/main/java/${test_package}/${potential_class}.java"
-                    
-                    echo "    Checking for class file: $class_file"
-                    if [ -f "$class_file" ]; then
-                      echo "Found target class: $full_class_name (inferred from test name)"
-                      if [ -z "$CHANGED_CLASSES" ]; then
-                        CHANGED_CLASSES="$full_class_name"
-                      else
-                        CHANGED_CLASSES="$CHANGED_CLASSES,$full_class_name"
-                      fi
-                      break
+                if [ -n "$target_class" ]; then
+                  full_class_name="${test_package_path//\//.}.${target_class}"
+                  target_file="core/src/main/java/${test_package_path}/${target_class}.java"
+                  
+                  if [ -f "$target_file" ]; then
+                    echo "✅ Found target class: $full_class_name (inferred from $test_file)"
+                    if [ -z "$CHANGED_CLASSES" ]; then
+                      CHANGED_CLASSES="$full_class_name"
+                    else
+                      CHANGED_CLASSES="$CHANGED_CLASSES,$full_class_name"
                     fi
+                  else
+                    echo "❌ Target class file not found: $target_file"
                   fi
-                done
+                fi
               fi
             done
           fi
           
+          # Set outputs
           if [ -z "$CHANGED_CLASSES" ]; then
             echo "skip_mutation_testing=true" >> $GITHUB_OUTPUT
-            echo "No testable classes found for mutation testing"
+            echo "❌ No testable classes found for mutation testing"
           else
             echo "changed_classes=$CHANGED_CLASSES" >> $GITHUB_OUTPUT
             echo "skip_mutation_testing=false" >> $GITHUB_OUTPUT
-            echo "Classes to test: $CHANGED_CLASSES"
+            echo "✅ Classes to test: $CHANGED_CLASSES"
           fi
       
+      - name: Display Change Detection Results
+        if: matrix.java-version == '24'
+        run: |
+          echo "=== 🔍 Change Detection Summary ==="
+          echo "Test changes detected: $TEST_CHANGES"
+          if [ "$TEST_CHANGES" = "true" ]; then
+            echo "✅ Tests were modified - mutation testing will run"
+          else
+            echo "ℹ️  No test changes detected"
+          fi
+          
+          if [ "${{ steps.changed-files.outputs.skip_mutation_testing }}" = "false" ]; then
+            echo "🧬 Mutation testing enabled for classes:"
+            echo "${{ steps.changed-files.outputs.changed_classes }}"
+          else
+            echo "⏭️  Mutation testing skipped - no applicable changes found"
+          fi
+
       - name: Run PITest mutation testing on changed classes
         if: matrix.java-version == '24' && steps.changed-files.outputs.skip_mutation_testing == 'false'
         run: |
@@ -262,17 +281,33 @@ jobs:
               echo "❌ MUTATION SCORE REGRESSION DETECTED!"
               echo "The mutation score dropped by ${DIFF}% (tolerance: ${TOLERANCE}%)"
               echo "🚨 BUILD FAILED: Please improve your tests to maintain mutation score quality."
+              echo "MUTATION_REGRESSION=true" >> $GITHUB_ENV
               exit 1
             else
               echo "✅ No significant mutation score regression detected (${DIFF}%)"
+              echo "MUTATION_REGRESSION=false" >> $GITHUB_ENV
             fi
           else
             echo "⚠️  Could not compare scores - skipping regression check"
           fi
       
+      - name: Motivation on Mutation Testing Failure 🎵
+        if: env.MUTATION_REGRESSION == 'true' && matrix.java-version == '24'
+        run: |
+          echo "Your changes made the mutation score go down"
+          echo "To learn more about mutation testing and how to do TDD effectively, check out:"
+          echo "https://www.youtube.com/watch?v=ZXsQAXx_ao0 "
+      
       - name: Upload mutation test reports
         if: always() && matrix.java-version == '24' && steps.changed-files.outputs.skip_mutation_testing == 'false'
         uses: actions/upload-artifact@v4
         with:
-          name: mutation-test-reports-build-${{ github.sha }}
+          name: pit-reports
           path: core/target/pit-reports/
+          
+      - name: Save PITest History
+        if: always() && matrix.java-version == '24'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pitest-history
+          path: core/target/pit-history/

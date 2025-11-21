@@ -47,14 +47,14 @@ class ArrayUtilExtendedTest {
      * </p>
      */
     //@Test
-   /* public void testRemoveConsecutiveDuplicatesNegativeEnd() {
+    public void testRemoveConsecutiveDuplicatesNegativeEnd() {
         int[] arr = {1, 2, 3, 4, 5};
         
         assertThrows(IllegalArgumentException.class, 
             () -> ArrayUtil.removeConsecutiveDuplicates(arr, -1),
             "Doit lancer IllegalArgumentException pour un paramètre end négatif");
     }
-   */
+   
     /**
      * Test 2: Teste que {@code calcSortOrder} lance une IllegalArgumentException quand les tableaux ont des tailles différentes
      * <p>
