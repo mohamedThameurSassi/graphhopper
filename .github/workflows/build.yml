@@ -41,14 +41,14 @@ jobs:
       
       - name: Rick Roll on Test Failure
         if: steps.maven-test.outcome == 'failure'
-        uses: TejasvOnly/random-rickroll@v1.0
-        with:
-          percentage: 100
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Fail if tests failed
-        if: steps.maven-test.outcome == 'failure'
-        run: exit 1
+        run: |
+          echo "❌ Tests failed! Here's a helpful tutorial on writing better tests:"
+          echo "🎥 https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+          echo ""
+          echo "Never gonna give you up, never gonna let you down! 🎵"
+            - name: Fail if tests failed
+              if: steps.maven-test.outcome == 'failure'
+              run: exit 1
 
   mutation-check:
     needs: build
