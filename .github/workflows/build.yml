@@ -143,16 +143,100 @@ jobs:
             -DoutputFormats=XML,HTML \
             -Dthreads=2
           
-          # Show mutation score
+          # Extract current mutation score
           if [ -f "core/target/pit-reports/mutations.xml" ]; then
             MUTATIONS_GENERATED=$(grep -o '<mutation ' core/target/pit-reports/mutations.xml | wc -l || echo "0")
             MUTATIONS_KILLED=$(grep -o 'status="KILLED"' core/target/pit-reports/mutations.xml | wc -l || echo "0")
             if [ "$MUTATIONS_GENERATED" -ne "0" ]; then
-              MUTATION_SCORE=$(echo "scale=1; $MUTATIONS_KILLED * 100 / $MUTATIONS_GENERATED" | bc)
-              echo "🧬 Mutation Score: $MUTATION_SCORE% ($MUTATIONS_KILLED/$MUTATIONS_GENERATED)"
+              CURRENT_MUTATION_SCORE=$(echo "scale=1; $MUTATIONS_KILLED * 100 / $MUTATIONS_GENERATED" | bc)
+              echo "🧬 Current Mutation Score: $CURRENT_MUTATION_SCORE% ($MUTATIONS_KILLED/$MUTATIONS_GENERATED)"
+              
+              # Store current results for comparison
+              echo "CURRENT_SCORE=$CURRENT_MUTATION_SCORE" >> $GITHUB_ENV
+              echo "CURRENT_KILLED=$MUTATIONS_KILLED" >> $GITHUB_ENV
+              echo "CURRENT_TOTAL=$MUTATIONS_GENERATED" >> $GITHUB_ENV
             else
               echo "🧬 No mutations generated"
+              echo "CURRENT_SCORE=0" >> $GITHUB_ENV
             fi
+          fi
+      
+      - name: Get baseline mutation score from previous commit
+        if: matrix.java-version == '24' && steps.changed-files.outputs.skip_mutation_testing == 'false'
+        run: |
+          # Get previous commit hash
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            PREV_COMMIT="${{ github.event.before }}"
+          else
+            PREV_COMMIT="HEAD~1"
+          fi
+          
+          echo "Comparing with previous commit: $PREV_COMMIT"
+          
+          # Stash current changes
+          git stash || true
+          
+          # Checkout previous commit
+          git checkout $PREV_COMMIT
+          
+          # Build and run PITest on previous commit
+          mvn -B clean install -pl web-api -am -q || true
+          mvn -pl core org.pitest:pitest-maven:mutationCoverage \
+            -DtargetClasses="${{ steps.changed-files.outputs.changed_classes }}" \
+            -DtargetTests="${{ steps.changed-files.outputs.changed_classes }}*Test" \
+            -DoutputFormats=XML \
+            -Dthreads=2 \
+            --quiet || true
+          
+          # Extract baseline score
+          if [ -f "core/target/pit-reports/mutations.xml" ]; then
+            BASELINE_MUTATIONS_GENERATED=$(grep -o '<mutation ' core/target/pit-reports/mutations.xml | wc -l || echo "0")
+            BASELINE_MUTATIONS_KILLED=$(grep -o 'status="KILLED"' core/target/pit-reports/mutations.xml | wc -l || echo "0")
+            if [ "$BASELINE_MUTATIONS_GENERATED" -ne "0" ]; then
+              BASELINE_SCORE=$(echo "scale=1; $BASELINE_MUTATIONS_KILLED * 100 / $BASELINE_MUTATIONS_GENERATED" | bc)
+              echo "📊 Baseline Mutation Score: $BASELINE_SCORE% ($BASELINE_MUTATIONS_KILLED/$BASELINE_MUTATIONS_GENERATED)"
+              echo "BASELINE_SCORE=$BASELINE_SCORE" >> $GITHUB_ENV
+            else
+              echo "📊 No baseline mutations found"
+              echo "BASELINE_SCORE=0" >> $GITHUB_ENV
+            fi
+          else
+            echo "📊 No baseline mutation report found"
+            echo "BASELINE_SCORE=0" >> $GITHUB_ENV
+          fi
+          
+          # Return to current commit
+          git checkout -
+          git stash pop || true
+      
+      - name: Check for mutation score regression
+        if: matrix.java-version == '24' && steps.changed-files.outputs.skip_mutation_testing == 'false'
+        run: |
+          CURRENT_SCORE="${{ env.CURRENT_SCORE }}"
+          BASELINE_SCORE="${{ env.BASELINE_SCORE }}"
+          TOLERANCE=5  # 5% tolerance
+          
+          echo "=== 🧬 Mutation Testing Regression Check ==="
+          echo "Classes tested: ${{ steps.changed-files.outputs.changed_classes }}"
+          echo "Baseline Score: ${BASELINE_SCORE}%"
+          echo "Current Score:  ${CURRENT_SCORE}%"
+          
+          if [ -n "$CURRENT_SCORE" ] && [ -n "$BASELINE_SCORE" ]; then
+            # Calculate difference
+            DIFF=$(echo "$CURRENT_SCORE - $BASELINE_SCORE" | bc)
+            echo "Difference: ${DIFF}%"
+            
+            # Check for regression (current score lower than baseline by more than tolerance)
+            if (( $(echo "$DIFF < -$TOLERANCE" | bc -l) )); then
+              echo "❌ MUTATION SCORE REGRESSION DETECTED!"
+              echo "The mutation score dropped by ${DIFF}% (tolerance: ${TOLERANCE}%)"
+              echo "🚨 BUILD FAILED: Please improve your tests to maintain mutation score quality."
+              exit 1
+            else
+              echo "✅ No significant mutation score regression detected (${DIFF}%)"
+            fi
+          else
+            echo "⚠️  Could not compare scores - skipping regression check"
           fi
       
       - name: Upload mutation test reports
