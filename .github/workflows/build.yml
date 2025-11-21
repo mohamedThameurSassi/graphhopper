@@ -44,13 +44,37 @@ jobs:
         id: changed-files
         if: matrix.java-version == '24'
         run: |
+          # Debug git information
+          echo "GitHub event: ${{ github.event_name }}"
+          echo "Before commit: ${{ github.event.before }}"
+          echo "Current HEAD: $(git rev-parse HEAD)"
+          
           # Get changed files in this push (comparing with previous commit)
           if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            # Regular push with previous commit
-            ALL_CHANGED_FILES=$(git diff --name-only ${{ github.event.before }}..HEAD | grep '\.java$' || true)
+            # Regular push with previous commit - add error checking
+            echo "Trying to get diff from ${{ github.event.before }} to HEAD"
+            if git rev-parse --verify ${{ github.event.before }} >/dev/null 2>&1; then
+              ALL_CHANGED_FILES=$(git diff --name-only ${{ github.event.before }}..HEAD 2>/dev/null | grep '\.java$' || true)
+              if [ $? -eq 0 ] && [ -n "$ALL_CHANGED_FILES" ]; then
+                echo "Successfully got diff using ${{ github.event.before }}..HEAD"
+              else
+                echo "Git diff failed, trying alternative approach"
+                ALL_CHANGED_FILES=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | grep '\.java$' || true)
+              fi
+            else
+              echo "Previous commit ${{ github.event.before }} not found, using HEAD~1"
+              ALL_CHANGED_FILES=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | grep '\.java$' || true)
+            fi
           else
             # First push or other cases - check last few commits
-            ALL_CHANGED_FILES=$(git diff --name-only HEAD~3..HEAD | grep '\.java$' || true)
+            echo "Using fallback: checking HEAD~3..HEAD"
+            ALL_CHANGED_FILES=$(git diff --name-only HEAD~3..HEAD 2>/dev/null | grep '\.java$' || true)
+          fi
+          
+          # If still no files found, check the latest commit only
+          if [ -z "$ALL_CHANGED_FILES" ]; then
+            echo "No files found in diff, checking latest commit only"
+            ALL_CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD | grep '\.java$' || true)
           fi
           echo "All changed Java files: $ALL_CHANGED_FILES"
           
@@ -92,15 +116,21 @@ jobs:
                 test_class_name=${test_class_path##*/}
                 test_class_name=${test_class_name%.java}
                 
+                echo "  Test class path: $test_class_path"
+                echo "  Test package: $test_package"
+                echo "  Test class name: $test_class_name"
+                
                 # Strategy: Pattern matching on test class name
                 potential_classes=""
                 if [[ $test_class_name == *Test ]]; then
                   # Remove "Test" suffix: ArrayUtilTest -> ArrayUtil
                   potential_classes="${test_class_name%Test}"
+                  echo "  Detected *Test pattern, potential class: $potential_classes"
                 elif [[ $test_class_name == *ExtendedTest ]]; then
                   # Remove "ExtendedTest" suffix: ArrayUtilExtendedTest -> ArrayUtil
                   base_name=${test_class_name%ExtendedTest}
                   potential_classes="$base_name ${base_name}Util ${base_name}Helper"
+                  echo "  Detected *ExtendedTest pattern, potential classes: $potential_classes"
                 fi
                 
                 # Test each potential class
@@ -109,6 +139,7 @@ jobs:
                     full_class_name="${test_package//\//.}.${potential_class}"
                     class_file="core/src/main/java/${test_package}/${potential_class}.java"
                     
+                    echo "    Checking for class file: $class_file"
                     if [ -f "$class_file" ]; then
                       echo "Found target class: $full_class_name (inferred from test name)"
                       if [ -z "$CHANGED_CLASSES" ]; then

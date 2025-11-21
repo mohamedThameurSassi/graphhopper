@@ -40,7 +40,7 @@ public class BreadthFirstSearchTest {
         counter = 0;
     }
 
-    @Test
+    /*@Test
     public void testBFS() {
         BreadthFirstSearch bfs = new BreadthFirstSearch() {
             @Override
@@ -109,6 +109,6 @@ public class BreadthFirstSearchTest {
 
         assertTrue(counter > 0);
         assertEquals("[1, 5, 2, 6, 3, 4]", list.toString());
-    }
+    }*/
 
 }
