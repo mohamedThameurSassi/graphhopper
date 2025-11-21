@@ -35,7 +35,20 @@ jobs:
           restore-keys: |
             ${{ runner.os}}-node_modules-
       - name: Build ${{ matrix.java-version }}
+        id: maven-test
         run: mvn -B clean test
+        continue-on-error: true
+      
+      - name: Rick Roll on Test Failure
+        if: steps.maven-test.outcome == 'failure'
+        uses: TejasvOnly/random-rickroll@v1.0
+        with:
+          percentage: 100
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Fail if tests failed
+        if: steps.maven-test.outcome == 'failure'
+        run: exit 1
 
   mutation-check:
     needs: build
@@ -127,8 +140,7 @@ jobs:
           
           if (( $(echo "$SCORE_CURRENT < $SCORE_PREV" | bc -l) )); then
              echo "Mutation score dropped from $SCORE_PREV to $SCORE_CURRENT!"
-             echo "Rickrolling..."
-             echo "https://www.youtube.com/watch?v=xvFZjo5PgG0&list=RDxvFZjo5PgG0&start_radio=1"
+             echo "Consider adding more comprehensive tests to maintain quality."
              exit 1
           else
              echo "Mutation score maintained or improved."
