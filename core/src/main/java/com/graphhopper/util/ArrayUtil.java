@@ -263,14 +263,4 @@ public class ArrayUtil {
         int sizeWithoutDuplicates = removeConsecutiveDuplicates(result, size);
         return Arrays.copyOf(result, sizeWithoutDuplicates);
     }
-
-    public static int untestedMethodForMutationTesting(int a, int b) {
-        int result = 0;
-        if (a > b) {
-            result = a - b;
-        } else {
-            result = b - a;
-        }
-        return result * 2;
-    }
 }
