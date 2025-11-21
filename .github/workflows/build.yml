@@ -38,6 +38,7 @@ jobs:
         run: mvn -B clean test
 
   mutation-check:
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -81,23 +82,39 @@ jobs:
           mvn -B clean install -pl web-api -am -DskipTests -q
           
           echo "Running Pitest on CURRENT commit..."
-          mvn -pl core org.pitest:pitest-maven:mutationCoverage -DtargetClasses="$CLASSES_TO_TEST" -DtargetTests="${CLASSES_TO_TEST}*Test" -DoutputFormats=XML -Dthreads=2 --quiet || true
+          # We use a broader test filter to ensure we catch the relevant tests
+          mvn -pl core org.pitest:pitest-maven:mutationCoverage \
+              -DtargetClasses="$CLASSES_TO_TEST" \
+              -DtargetTests="com.graphhopper.*" \
+              -DoutputFormats=XML \
+              -Dthreads=2 \
+              -DfailWhenNoMutations=false \
+              --quiet || true
             
           if [ ! -f "core/target/pit-reports/mutations.xml" ]; then
              echo "No mutation report found for current commit."
-             exit 0
+             # If no mutations are found, we can't compare, so we assume it's fine or 0
+             SCORE_CURRENT=0
+             KILLED_CURRENT=0
+             TOTAL_CURRENT=0
+          else
+             KILLED_CURRENT=$(grep -o 'status="KILLED"' core/target/pit-reports/mutations.xml | wc -l)
+             TOTAL_CURRENT=$(grep -o '<mutation ' core/target/pit-reports/mutations.xml | wc -l)
+             if [ "$TOTAL_CURRENT" -eq 0 ]; then SCORE_CURRENT=0; else SCORE_CURRENT=$(echo "scale=2; $KILLED_CURRENT * 100 / $TOTAL_CURRENT" | bc); fi
           fi
-          
-          KILLED_CURRENT=$(grep -o 'status="KILLED"' core/target/pit-reports/mutations.xml | wc -l)
-          TOTAL_CURRENT=$(grep -o '<mutation ' core/target/pit-reports/mutations.xml | wc -l)
-          if [ "$TOTAL_CURRENT" -eq 0 ]; then SCORE_CURRENT=0; else SCORE_CURRENT=$(echo "scale=2; $KILLED_CURRENT * 100 / $TOTAL_CURRENT" | bc); fi
           echo "Current Score: $SCORE_CURRENT ($KILLED_CURRENT/$TOTAL_CURRENT)"
           
           git checkout HEAD^
           
           echo "Running Pitest on PREVIOUS commit..."
           mvn -B clean install -pl web-api -am -DskipTests -q
-          mvn -pl core org.pitest:pitest-maven:mutationCoverage -DtargetClasses="$CLASSES_TO_TEST" -DtargetTests="${CLASSES_TO_TEST}*Test" -DoutputFormats=XML -Dthreads=2 --quiet || true
+          mvn -pl core org.pitest:pitest-maven:mutationCoverage \
+              -DtargetClasses="$CLASSES_TO_TEST" \
+              -DtargetTests="com.graphhopper.*" \
+              -DoutputFormats=XML \
+              -Dthreads=2 \
+              -DfailWhenNoMutations=false \
+              --quiet || true
             
           if [ ! -f "core/target/pit-reports/mutations.xml" ]; then
              SCORE_PREV=0
